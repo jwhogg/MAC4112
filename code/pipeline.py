@@ -1,6 +1,15 @@
+import os
+
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["POLARS_MAX_THREADS"] = "1"
+
 import argparse
 import logging
 from concurrent.futures import ProcessPoolExecutor
+from functools import partial
+from multiprocessing import Pool
 from pathlib import Path
 
 import h5py
@@ -9,6 +18,7 @@ import pandas as pd
 import polars as pl
 from scipy.signal import stft
 from scipy.stats import kurtosis, skew
+from tqdm import tqdm
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--verbose", action="store_true", help="show logs in terminal")
@@ -56,8 +66,8 @@ class Pipeline:
         K_f = mean_mag4 / (mean_mag2**2) - 2
         return K_f
 
-    def compute_row_stats(self, df: pl.DataFrame, value_col: str) -> dict:
-        NPERSEG = len(df.iloc[0]) / 25
+    def compute_row_stats(self, df: pl.DataFrame, value_col: str, SAMPLE_RATE) -> dict:
+        NPERSEG = int(len(df) / 25)
         x = df[value_col].to_numpy().astype(float)
 
         mean_ = x.mean()
@@ -98,6 +108,17 @@ class Pipeline:
         }
         return {f"{value_col}_{k}": v for k, v in stats.items()}
 
+    def process_file(self, file, cols):
+        df = pl.read_parquet(file, columns=cols)  # only load needed cols
+        stats = {}
+        for col in cols:
+            if col not in df.columns:
+                continue
+            rate = 1000 if col == "Power" else 51_20
+            stats |= self.compute_row_stats(df, col, SAMPLE_RATE=rate)
+        logging.info(f"done {file}")
+        return str(file).split("/")[-1].split(".")[0], stats
+
     def bronze_layer(self):
         logging.info("BRONZE LAYER: beginning checks...")
 
@@ -110,7 +131,7 @@ class Pipeline:
             print("WARNING: there is missing data!")
             # TODO: if missing data, specify where it is coming from and fix it via interpolation
 
-    def silver_layer(self):
+    def silver_layer(self, cols: list, sampling_rate=-1):
         logging.info("SILVER LAYER: beginning checks...")
         files = list(Path(self.dir_path).glob("*.parquet"))
         # ---- Calculate Summary Statistics
@@ -121,11 +142,38 @@ class Pipeline:
         # combine all the trial dfs into one df, using the trial name as below
         # str(file).split("/")[-1].split(".")[0]
 
-        for file in files:
-            df = pl.read_parquet(file)
-            # SAMPLING RATES:
-            # FOR VIBRATION: 51.2 kHz
-            # FOR POWER: 1kHz
+        # all_stats = {}  # {col_name: {stat: value}}
+
+        # total_iters = len(files) * len(cols)
+        # pbar = tqdm(total=total_iters)
+
+        func = partial(self.process_file, cols=cols)
+
+        with ProcessPoolExecutor(max_workers=4) as ex:
+            results = list(tqdm(ex.map(func, files), total=len(files)))
+            print(results)
+
+        # for file in files:
+        #     stats = {}
+        #     df = pl.read_parquet(file)
+        #     for col in cols:
+        #         if col not in df.columns:
+        #             logging.warning(f"{col} missing in {file.name}, skipping")
+        #             pbar.update(1)
+        #             continue
+        #         # SAMPLING RATES:
+        #         # FOR VIBRATION: 51.2 kHz
+        #         # FOR POWER: 1kHz
+        #         if sampling_rate == -1:
+        #             sampling_rate = 1000 if col == "Power" else 51_20
+        #         stats = stats | self.compute_row_stats(
+        #             df, col, SAMPLE_RATE=sampling_rate
+        #         )
+        #         pbar.update(1)
+        #     trial_name = str(file).split("/")[-1].split(".")[0]
+        #     all_stats[trial_name] = stats
+        #     pbar.set_description(f"{trial_name}...")
+        # print(all_stats)
         # normalise values
 
     def gold_layer(self):
@@ -135,4 +183,15 @@ class Pipeline:
 pipeline = Pipeline("code/parquet_output")
 
 pipeline.bronze_layer()
-pipeline.silver_layer()
+pipeline.silver_layer(
+    cols=[
+        "SpindleAccX",
+        "SpindleAccY",
+        "SpindleAccZ",
+        "PlateLFAccX",
+        "PlateLFAccY",
+        "PlateLFAccZ",
+        "PlateHFAccZ",
+        "Power",
+    ]
+)
