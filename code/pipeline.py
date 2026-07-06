@@ -109,14 +109,19 @@ class Pipeline:
         return {f"{value_col}_{k}": v for k, v in stats.items()}
 
     def process_file(self, file, cols):
-        df = pl.read_parquet(file, columns=cols)  # only load needed cols
+        # logging.info(f"about to read file {file}")
+        print("about to read file", flush=True)
+        df = pl.read_parquet(file)  # only load needed cols
+        # logging.info("done reading!")
         stats = {}
         for col in cols:
+            logging.info(f"doing col {col} for file {file}")
             if col not in df.columns:
                 continue
             rate = 1000 if col == "Power" else 51_20
             stats |= self.compute_row_stats(df, col, SAMPLE_RATE=rate)
-        logging.info(f"done {file}")
+        # logging.info(f"done {file}")
+        print("done a process!", flush=True)
         return str(file).split("/")[-1].split(".")[0], stats
 
     def bronze_layer(self):
@@ -136,45 +141,14 @@ class Pipeline:
         files = list(Path(self.dir_path).glob("*.parquet"))
         # ---- Calculate Summary Statistics
 
-        # get a df of each trial
-        # for each df, make concurrent for each signal (should be 7), and pass through the summary stats function
-        # this returns a dict each, plug all those dicts in to a new summary stats for that trial
-        # combine all the trial dfs into one df, using the trial name as below
-        # str(file).split("/")[-1].split(".")[0]
+        results = []
+        for file in files:
+            results.append(self.process_file(file, cols))
 
-        # all_stats = {}  # {col_name: {stat: value}}
-
-        # total_iters = len(files) * len(cols)
-        # pbar = tqdm(total=total_iters)
-
-        func = partial(self.process_file, cols=cols)
-
-        with ProcessPoolExecutor(max_workers=4) as ex:
-            results = list(tqdm(ex.map(func, files), total=len(files)))
-            print(results)
-
-        # for file in files:
-        #     stats = {}
-        #     df = pl.read_parquet(file)
-        #     for col in cols:
-        #         if col not in df.columns:
-        #             logging.warning(f"{col} missing in {file.name}, skipping")
-        #             pbar.update(1)
-        #             continue
-        #         # SAMPLING RATES:
-        #         # FOR VIBRATION: 51.2 kHz
-        #         # FOR POWER: 1kHz
-        #         if sampling_rate == -1:
-        #             sampling_rate = 1000 if col == "Power" else 51_20
-        #         stats = stats | self.compute_row_stats(
-        #             df, col, SAMPLE_RATE=sampling_rate
-        #         )
-        #         pbar.update(1)
-        #     trial_name = str(file).split("/")[-1].split(".")[0]
-        #     all_stats[trial_name] = stats
-        #     pbar.set_description(f"{trial_name}...")
-        # print(all_stats)
-        # normalise values
+        summary_df = pl.DataFrame(
+            [{"trial": trial, **stats} for trial, stats in results]
+        )
+        summary_df.write_parquet("silver_layer.parquet")
 
     def gold_layer(self):
         return None
