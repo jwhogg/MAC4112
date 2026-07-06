@@ -1,12 +1,10 @@
-import os
-
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["POLARS_MAX_THREADS"] = "1"
-
+# os.environ["OMP_NUM_THREADS"] = "1"
+# os.environ["OPENBLAS_NUM_THREADS"] = "1"
+# os.environ["MKL_NUM_THREADS"] = "1"
+# os.environ["POLARS_MAX_THREADS"] = "1"
 import argparse
 import logging
+import os
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 from multiprocessing import Pool
@@ -68,7 +66,7 @@ class Pipeline:
 
     def compute_row_stats(self, df: pl.DataFrame, value_col: str, SAMPLE_RATE) -> dict:
         NPERSEG = int(len(df) / 25)
-        x = df[value_col].to_numpy().astype(float)
+        x = df[value_col].to_numpy().astype(np.float32)
 
         mean_ = x.mean()
         std_ = x.std()
