@@ -18,21 +18,6 @@ from scipy.signal import stft
 from scipy.stats import kurtosis, skew
 from tqdm import tqdm
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--verbose", action="store_true", help="show logs in terminal")
-args = parser.parse_args()
-
-handlers = [logging.FileHandler("pipeline.log")]
-if args.verbose:
-    handlers.append(logging.StreamHandler())
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=handlers,
-    force=True,
-)
-
 """
 The Class for the Medalian Pipeline
 
@@ -48,7 +33,13 @@ class Pipeline:
 
     def bronze_check_missing_data(self, file_path: str):
         df = pl.read_parquet(file_path)
-        return df.null_count().sum_horizontal().item()
+        null_count = df.null_count().sum_horizontal().item()
+        nan_count = (
+            df.select(pl.col(pl.Float32, pl.Float64).is_nan().sum())
+            .sum_horizontal()
+            .item()
+        )
+        return null_count + nan_count
 
     def compute_spectral_kurtosis(
         self, x: np.ndarray, fs: float, nperseg: int
@@ -66,7 +57,12 @@ class Pipeline:
 
     def compute_row_stats(self, df: pl.DataFrame, value_col: str, SAMPLE_RATE) -> dict:
         NPERSEG = int(len(df) / 25)
-        x = df[value_col].to_numpy().astype(np.float32)
+        x = df[value_col].to_numpy().astype(np.float64)
+
+        if len(x) < 25 or np.all(x == 0) or np.std(x) == 0:
+            logging.warning(
+                f"{value_col}: degenerate signal, len={len(x)}, std={np.std(x)}"
+            )
 
         mean_ = x.mean()
         std_ = x.std()
@@ -107,10 +103,8 @@ class Pipeline:
         return {f"{value_col}_{k}": v for k, v in stats.items()}
 
     def process_file(self, file, cols):
-        # logging.info(f"about to read file {file}")
-        print("about to read file", flush=True)
+        logging.info(f"about to read file {file}")
         df = pl.read_parquet(file)  # only load needed cols
-        # logging.info("done reading!")
         stats = {}
         for col in cols:
             logging.info(f"doing col {col} for file {file}")
@@ -118,8 +112,7 @@ class Pipeline:
                 continue
             rate = 1000 if col == "Power" else 51_20
             stats |= self.compute_row_stats(df, col, SAMPLE_RATE=rate)
-        # logging.info(f"done {file}")
-        print("done a process!", flush=True)
+        logging.info(f"done {file}")
         return str(file).split("/")[-1].split(".")[0], stats
 
     def bronze_layer(self):
@@ -134,7 +127,16 @@ class Pipeline:
             print("WARNING: there is missing data!")
             # TODO: if missing data, specify where it is coming from and fix it via interpolation
 
-    def silver_layer(self, cols: list, sampling_rate=-1):
+    def silver_layer(
+        self,
+        cols: list,
+        sampling_rate=-1,
+        run_override=False,
+        path="code/silver_data/silver_layer.parquet",
+    ):
+        if (Path(path).exists()) and (not run_override):
+            logging.info("Silver data already generated, skipping...")
+            return None
         logging.info("SILVER LAYER: beginning checks...")
         files = list(Path(self.dir_path).glob("*.parquet"))
         # ---- Calculate Summary Statistics
@@ -146,24 +148,96 @@ class Pipeline:
         summary_df = pl.DataFrame(
             [{"trial": trial, **stats} for trial, stats in results]
         )
-        summary_df.write_parquet("silver_layer.parquet")
+        summary_df.write_parquet(path)
+        logging.info("SILVER LAYER: Done! Saved File")
 
-    def gold_layer(self):
+    def gold_layer(self, silver_path="code/silver_data/silver_layer.parquet"):
+        if Path(silver_path).exists():
+            logging.info("Silver layer data not found, running Silver layer...")
+            self.silver_layer(
+                cols=[
+                    "SpindleAccX",
+                    "SpindleAccY",
+                    "SpindleAccZ",
+                    "PlateLFAccX",
+                    "PlateLFAccY",
+                    "PlateLFAccZ",
+                    "PlateHFAccZ",
+                    "Power",
+                ],
+            )
+
+        df = pl.read_parquet(silver_path)
+
         return None
 
 
-pipeline = Pipeline("code/parquet_output")
+# ---- command line running
+# example usage:
+# > python pipeline.py
+# > python pipeline.py --path code/other_output --run-override
+# > python pipeline.py --cols SpindleAccX Power --skip-bronze
+def main():
+    parser = argparse.ArgumentParser(description="Run Pipeline")
+    parser.add_argument(
+        "--data_path", default="code/parquet_output", help="Pipeline output path"
+    )
+    parser.add_argument(
+        "--cols",
+        nargs="+",
+        default=[
+            "SpindleAccX",
+            "SpindleAccY",
+            "SpindleAccZ",
+            "PlateLFAccX",
+            "PlateLFAccY",
+            "PlateLFAccZ",
+            "PlateHFAccZ",
+            "Power",
+        ],
+        help="Columns to process in silver layer",
+    )
+    parser.add_argument(
+        "--silver-data-path",
+        default="code/silver_data/silver_layer.parquet",
+        help="Where the silver layer saves its output data file to",
+    )
+    parser.add_argument(
+        "--silver-run-override",
+        action="store_true",
+        help="Force re-run even if output exists",
+    )
+    parser.add_argument(
+        "--skip-bronze-checks",
+        action="store_true",
+        help="Skip the bronze layer step",
+    )
+    parser.add_argument("--verbose", action="store_true", help="show logs in terminal")
 
-pipeline.bronze_layer()
-pipeline.silver_layer(
-    cols=[
-        "SpindleAccX",
-        "SpindleAccY",
-        "SpindleAccZ",
-        "PlateLFAccX",
-        "PlateLFAccY",
-        "PlateLFAccZ",
-        "PlateHFAccZ",
-        "Power",
-    ]
-)
+    args = parser.parse_args()
+
+    handlers = [logging.FileHandler("pipeline.log")]
+    if args.verbose:
+        handlers.append(logging.StreamHandler())
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=handlers,
+        force=True,
+    )
+
+    pipeline = Pipeline(args.data_path)
+
+    if not args.skip_bronze_checks:
+        pipeline.bronze_layer()
+
+    pipeline.silver_layer(
+        cols=args.cols,
+        run_override=args.silver_run_override,
+        path=args.silver_data_path,
+    )
+
+
+if __name__ == "__main__":
+    main()
