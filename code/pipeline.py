@@ -1,22 +1,11 @@
-# os.environ["OMP_NUM_THREADS"] = "1"
-# os.environ["OPENBLAS_NUM_THREADS"] = "1"
-# os.environ["MKL_NUM_THREADS"] = "1"
-# os.environ["POLARS_MAX_THREADS"] = "1"
 import argparse
 import logging
-import os
-from concurrent.futures import ProcessPoolExecutor
-from functools import partial
-from multiprocessing import Pool
 from pathlib import Path
 
-import h5py
 import numpy as np
-import pandas as pd
 import polars as pl
 from scipy.signal import stft
 from scipy.stats import kurtosis, skew
-from tqdm import tqdm
 
 """
 The Class for the Medalian Pipeline
@@ -28,10 +17,19 @@ Expects that the files are .parquet
 
 
 class Pipeline:
-    def __init__(self, dir_path: str):
-        self.dir_path = dir_path
+    def __init__(
+        self,
+        data_path: str,
+        bronze_data_path: str,
+        silver_data_path: str,
+        gold_data_path: str,
+    ):
+        self.data_path = data_path
+        self.bronze_data_path = bronze_data_path
+        self.silver_data_path = silver_data_path
+        self.gold_data_path = gold_data_path
 
-    def bronze_check_missing_data(self, file_path: str):
+    def bronze_check_missing_data(self):
         df = pl.read_parquet(file_path)
         null_count = df.null_count().sum_horizontal().item()
         nan_count = (
@@ -142,20 +140,11 @@ class Pipeline:
             results.append(stats)
         return results
 
-        # for col in cols:
-        #     logging.info(f"doing col {col} for file {file}")
-        #     if col not in df.columns:
-        #         continue
-        #     rate = 1000 if col == "Power" else 51_20
-        #     stats |= self.compute_row_stats(df, col, SAMPLE_RATE=rate)
-        # logging.info(f"done {file}")
-        # return str(file).split("/")[-1].split(".")[0], stats
-
     def bronze_layer(self, signal_cols, path, min_samples=25):
         # expects to be given 'path': the path to the dir to save bronze layer data
         logging.info("BRONZE LAYER: beginning checks...")
 
-        files = list(Path(self.dir_path).glob("*.parquet"))
+        files = list(Path(self.data_path).glob("*.parquet"))
 
         for f in files:
             missing = self.bronze_check_missing_data(str(f))
@@ -178,20 +167,18 @@ class Pipeline:
     def silver_layer(
         self,
         cols: list,
-        path,  # path to save silver data to
-        bronze_path,
         sampling_rate=-1,
         run_override=False,
     ):
-        if not (Path(bronze_path).exists()):
+        if not (Path(self.bronze_data_path).exists()):
             logging.error(
-                f"ERROR: no data files found in supplied bronze path {bronze_path}!"
+                f"ERROR: no data files found in supplied bronze path {self.bronze_data_path}!"
             )
-        if (Path(path).exists()) and (not run_override):
+        if (Path(self.silver_data_path).exists()) and (not run_override):
             logging.info("Silver data already generated, skipping...")
             return None
         logging.info("SILVER LAYER: beginning checks...")
-        files = list(Path(bronze_path).glob("*.parquet"))
+        files = list(Path(self.bronze_data_path).glob("*.parquet"))
         # ---- Calculate Summary Statistics
 
         results = []
@@ -199,30 +186,28 @@ class Pipeline:
             results.extend(self.process_file(file, cols))
 
         summary_df = pl.DataFrame(results)
-        summary_df.write_parquet(path)
+        summary_df.write_parquet(self.silver_data_path)
         logging.info("SILVER LAYER: Done! Saved File")
 
-    # def gold_layer(self, bronze_path, silver_path, gold_path):
-    #     if Path(silver_path).exists():
-    #         logging.info("Silver layer data not found, running Silver layer...")
-    #         self.silver_layer(
-    #             bronze_path,
-    #             silver_path,
-    #             cols=[
-    #                 "SpindleAccX",
-    #                 "SpindleAccY",
-    #                 "SpindleAccZ",
-    #                 "PlateLFAccX",
-    #                 "PlateLFAccY",
-    #                 "PlateLFAccZ",
-    #                 "PlateHFAccZ",
-    #                 "Power",
-    #             ],
-    #         )
+    def gold_layer(self):
+        if Path(self.silver_data_path).exists():
+            logging.info("Silver layer data not found, running Silver layer...")
+            self.silver_layer(
+                cols=[
+                    "SpindleAccX",
+                    "SpindleAccY",
+                    "SpindleAccZ",
+                    "PlateLFAccX",
+                    "PlateLFAccY",
+                    "PlateLFAccZ",
+                    "PlateHFAccZ",
+                    "Power",
+                ],
+            )
 
-    #     df = pl.read_parquet(silver_path)
+        df = pl.read_parquet(self.silver_data_path)
 
-    #     return None
+        return None
 
 
 # ---- command line running
@@ -285,16 +270,19 @@ def main():
         force=True,
     )
 
-    pipeline = Pipeline(args.data_path)  # TODO: SET / GET PATHS FROM THE CLASS INIT
+    pipeline = Pipeline(
+        args.data_path,
+        args.bronze_data_path,
+        args.silver_data_path,
+        args.gold_data_path,
+    )
 
     if not args.skip_bronze_checks:
-        pipeline.bronze_layer(path=args.bronze_data_path, signal_cols=args.cols)
+        pipeline.bronze_layer(signal_cols=args.cols)
 
     pipeline.silver_layer(
         cols=args.cols,
         run_override=args.silver_run_override,
-        bronze_path=args.bronze_data_path,
-        path=args.silver_data_path,
     )
 
 
