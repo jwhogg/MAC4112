@@ -1,11 +1,14 @@
 import argparse
 import logging
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
 import polars as pl
 from scipy.signal import stft
 from scipy.stats import kurtosis, skew
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
 
 """
 The Class for the Medalian Pipeline
@@ -28,6 +31,14 @@ class Pipeline:
         self.bronze_data_path = bronze_data_path
         self.silver_data_path = silver_data_path
         self.gold_data_path = gold_data_path
+
+        # if any of the necessary folders don't exist, create them
+        Path(data_path).mkdir(parents=True, exist_ok=True)
+        for path in [bronze_data_path, silver_data_path, gold_data_path]:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+
+    def get_timestamp(self) -> str:
+        return datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
     def bronze_check_missing_data(self, path):
         df = pl.read_parquet(path)
@@ -140,6 +151,8 @@ class Pipeline:
             results.append(stats)
         return results
 
+    # -------------------------------------------------------------------------------
+
     def bronze_layer(self, signal_cols, min_samples=25):
         # expects to be given 'path': the path to the dir to save bronze layer data
         logging.info("BRONZE LAYER: beginning checks...")
@@ -163,6 +176,7 @@ class Pipeline:
                 df = df.filter(~pl.col("run").is_in(list(bad_runs)))
 
             df.write_parquet(Path(self.bronze_data_path) / f.name)
+            logging.info(f"BRONZE LAYER: Done! Saved File to {self.bronze_data_path}")
 
     def silver_layer(
         self,
@@ -185,12 +199,13 @@ class Pipeline:
         for file in files:
             results.extend(self.process_file(file, cols))
 
-        summary_df = pl.DataFrame(results)
-        summary_df.write_parquet(self.silver_data_path)
-        logging.info("SILVER LAYER: Done! Saved File")
+        silver_df = pl.DataFrame(results)
+        silver_df.write_parquet(f"{self.silver_data_path}_{self.get_timestamp()}")
+        logging.info(f"SILVER LAYER: Done! Saved File to {self.silver_data_path}")
 
     def gold_layer(self):
-        if Path(self.silver_data_path).exists():
+        logging.info("GOLD LAYER: starting...")
+        if not Path(self.silver_data_path).exists():
             logging.info("Silver layer data not found, running Silver layer...")
             self.silver_layer(
                 cols=[
@@ -207,7 +222,33 @@ class Pipeline:
 
         df = pl.read_parquet(self.silver_data_path)
 
-        return None
+        exclude_cols = ["trial", "run", "fault_mode", "routine"]
+        feature_cols = [c for c in df.columns if c not in exclude_cols]
+
+        routine_frames = []
+        for routine in df["routine"].unique().to_list():
+            logging.info(f"GOLD LAYER: Running PCA for {routine}...")
+            sub_df = df.filter(pl.col("routine") == routine)
+
+            X = sub_df.select(feature_cols).to_numpy()
+            X_scaled = StandardScaler().fit_transform(X)
+
+            pca = PCA(n_components=3)
+            components = pca.fit_transform(X_scaled)
+
+            sub_df = sub_df.select(["trial", "run", "fault_mode"]).with_columns(
+                [
+                    pl.Series("PC1", components[:, 0]),
+                    pl.Series("PC2", components[:, 1]),
+                    pl.Series("PC3", components[:, 2]),
+                ]
+            )
+            routine_frames.append(sub_df)
+
+        gold_df = pl.concat(routine_frames)
+        gold_path_timestamped = f"{self.gold_data_path}_{self.get_timestamp()}"
+        gold_df.write_parquet(gold_path_timestamped)
+        logging.info(f"GOLD LAYER: Done! Saved File to {gold_path_timestamped}")
 
 
 # ---- command line running
@@ -245,6 +286,12 @@ def main():
         default="code/silver_data/silver_layer.parquet",
         help="Where the silver layer saves its output data file to",
     )
+    parser.add_argument(
+        "--gold-data-path",
+        default="code/gold_data/gold_layer.parquet",
+        help="Where the silver layer saves its output data file to",
+    )
+
     parser.add_argument(
         "--silver-run-override",
         action="store_true",
