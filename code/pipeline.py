@@ -9,6 +9,7 @@ from scipy.signal import stft
 from scipy.stats import kurtosis, skew
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
+from tqdm import tqdm
 
 """
 The Class for the Medalian Pipeline
@@ -136,7 +137,8 @@ class Pipeline:
         df = pl.read_parquet(file)
         trial = str(file).split("/")[-1].split(".")[0]
         results = []
-        for run_id, run_df in df.group_by("run", maintain_order=True):
+        runs = list(df.group_by("run", maintain_order=True))
+        for run_id, run_df in tqdm(runs, desc="Calculating Summary Statistics"):
             stats = {}
             for col in cols:
                 if col not in df.columns:
@@ -159,7 +161,7 @@ class Pipeline:
 
         files = list(Path(self.data_path).glob("*.parquet"))
 
-        for f in files:
+        for f in tqdm(files, desc="checking for missing data"):
             missing = self.bronze_check_missing_data(str(f))
             if missing > 0:
                 logging.warning(f"{f.name}: {missing} missing values found")
@@ -176,7 +178,7 @@ class Pipeline:
                 df = df.filter(~pl.col("run").is_in(list(bad_runs)))
 
             df.write_parquet(Path(self.bronze_data_path) / f.name)
-            logging.info(f"BRONZE LAYER: Done! Saved File to {self.bronze_data_path}")
+        logging.info(f"BRONZE LAYER: Done! Saved Files to {self.bronze_data_path}")
 
     def silver_layer(
         self,
@@ -226,7 +228,9 @@ class Pipeline:
         feature_cols = [c for c in df.columns if c not in exclude_cols]
 
         routine_frames = []
-        for routine in df["routine"].unique().to_list():
+        for routine in tqdm(
+            df["routine"].unique().to_list(), desc="Processing Features for PCA"
+        ):
             logging.info(f"GOLD LAYER: Running PCA for {routine}...")
             sub_df = df.filter(pl.col("routine") == routine)
 
