@@ -202,7 +202,9 @@ class Pipeline:
             results.extend(self.process_file(file, cols))
 
         silver_df = pl.DataFrame(results)
-        silver_df.write_parquet(f"{self.silver_data_path}_{self.get_timestamp()}")
+        silver_path = f"{self.silver_data_path}_{self.get_timestamp()}"
+        silver_df.write_parquet(silver_path)
+        self.silver_data_path = silver_path
         logging.info(f"SILVER LAYER: Done! Saved File to {self.silver_data_path}")
 
     def gold_layer(self):
@@ -251,6 +253,7 @@ class Pipeline:
 
         gold_df = pl.concat(routine_frames)
         gold_path_timestamped = f"{self.gold_data_path}_{self.get_timestamp()}"
+        self.gold_data_path = gold_path_timestamped
         gold_df.write_parquet(gold_path_timestamped)
         logging.info(f"GOLD LAYER: Done! Saved File to {gold_path_timestamped}")
 
