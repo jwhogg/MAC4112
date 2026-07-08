@@ -29,8 +29,8 @@ class Pipeline:
         self.silver_data_path = silver_data_path
         self.gold_data_path = gold_data_path
 
-    def bronze_check_missing_data(self):
-        df = pl.read_parquet(file_path)
+    def bronze_check_missing_data(self, path):
+        df = pl.read_parquet(path)
         null_count = df.null_count().sum_horizontal().item()
         nan_count = (
             df.select(pl.col(pl.Float32, pl.Float64).is_nan().sum())
@@ -140,7 +140,7 @@ class Pipeline:
             results.append(stats)
         return results
 
-    def bronze_layer(self, signal_cols, path, min_samples=25):
+    def bronze_layer(self, signal_cols, min_samples=25):
         # expects to be given 'path': the path to the dir to save bronze layer data
         logging.info("BRONZE LAYER: beginning checks...")
 
@@ -162,7 +162,7 @@ class Pipeline:
                 )
                 df = df.filter(~pl.col("run").is_in(list(bad_runs)))
 
-            df.write_parquet(Path(path) / f.name)
+            df.write_parquet(Path(self.bronze_data_path) / f.name)
 
     def silver_layer(
         self,
