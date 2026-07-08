@@ -336,6 +336,8 @@ def main():
         run_override=args.silver_run_override,
     )
 
+    pipeline.gold_layer()
+
 
 if __name__ == "__main__":
     main()
