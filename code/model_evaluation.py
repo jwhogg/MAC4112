@@ -2,6 +2,7 @@ from abc import ABC
 from sklearn.metrics import classification_report
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
 import xgboost as xgb
 import numpy as np
 import polars as pl
@@ -43,7 +44,7 @@ def evaluate(model: Model, X_test: np.ndarray, y_test: np.ndarray):
 
 def main():
 
-    DATA_PATH = "gold_data/gold_layer.parquet"
+    DATA_PATH = "code/gold_data/gold_layer.parquet"
 
     df = pl.read_parquet(DATA_PATH)
 
@@ -57,14 +58,18 @@ def main():
         X, y, test_size=0.35, stratify=y, random_state=42
     )
 
+    le = LabelEncoder()
+    y_train_enc = le.fit_transform(y_train)
+    y_test_enc = le.transform(y_test)
+
     LR_model = Model("Logistic Regression", LogisticRegression)
     XGB_model = Model("XGBoost", xgb.XGBClassifier)
 
     LR_model.fit(X_train, y_train)
-    XGB_model.fit(X_train, y_train)
+    XGB_model.fit(X_train, y_train_enc)
 
     evaluate(LR_model, X_test, y_test)
-    evaluate(XGB_model, X_test, y_test)
+    evaluate(XGB_model, X_test, y_test_enc)
 
 
 if __name__ == "__main__":
