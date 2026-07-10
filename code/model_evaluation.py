@@ -61,11 +61,11 @@ def main():
     XGB_model = Model("XGBoost", xgb.XGBClassifier)
 
     LR_model.fit(X_train, y_train)
+    XGB_model.fit(X_train, y_train)
+
+    evaluate(LR_model, X_test, y_test)
+    evaluate(XGB_model, X_test, y_test)
 
 
 if __name__ == "__main__":
     main()
-
-# need to have a generic model class that is capable of taking data and producing predictions
-# whatever models that are to be tested will use this generic class
-# will have a seperate evaluation function
