@@ -1,6 +1,7 @@
 from abc import ABC
 from sklearn.metrics import classification_report
 from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
 import xgboost as xgb
 import numpy as np
 import polars as pl
@@ -42,9 +43,9 @@ def evaluate(model: Model, X_test: np.ndarray, y_test: np.ndarray):
 
 def main():
 
-    DATA_PATH = "gold_data/gold_layer.parquet_2026-07-08_12-07-25"
+    DATA_PATH = "gold_data/gold_layer.parquet"
 
-    df = pl.read_parquet(self.gold_data_path)
+    df = pl.read_parquet(DATA_PATH)
 
     exclude_cols = ["trial", "run", "fault_mode", "routine"]
     feature_cols = [c for c in df.columns if c not in exclude_cols]
