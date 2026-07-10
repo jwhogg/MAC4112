@@ -1,6 +1,5 @@
 import argparse
 import logging
-from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -37,9 +36,6 @@ class Pipeline:
         Path(data_path).mkdir(parents=True, exist_ok=True)
         for path in [bronze_data_path, silver_data_path, gold_data_path]:
             Path(path).parent.mkdir(parents=True, exist_ok=True)
-
-    def get_timestamp(self) -> str:
-        return datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
     def bronze_check_missing_data(self, path):
         df = pl.read_parquet(path)
@@ -202,9 +198,7 @@ class Pipeline:
             results.extend(self.process_file(file, cols))
 
         silver_df = pl.DataFrame(results)
-        silver_path = f"{self.silver_data_path}_{self.get_timestamp()}"
-        silver_df.write_parquet(silver_path)
-        self.silver_data_path = silver_path
+        silver_df.write_parquet(self.silver_data_path)
         logging.info(f"SILVER LAYER: Done! Saved File to {self.silver_data_path}")
 
     def gold_layer(self):
@@ -252,10 +246,8 @@ class Pipeline:
             routine_frames.append(sub_df)
 
         gold_df = pl.concat(routine_frames)
-        gold_path_timestamped = f"{self.gold_data_path}_{self.get_timestamp()}"
-        self.gold_data_path = gold_path_timestamped
-        gold_df.write_parquet(gold_path_timestamped)
-        logging.info(f"GOLD LAYER: Done! Saved File to {gold_path_timestamped}")
+        gold_df.write_parquet(self.gold_data_path)
+        logging.info(f"GOLD LAYER: Done! Saved File to {self.gold_data_path}")
 
 
 # ---- command line running
