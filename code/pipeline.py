@@ -56,6 +56,7 @@ class Pipeline:
             + [pl.col(c).std().alias(f"{c}_std") for c in cols]
         )
 
+        bad_short = run_stats.filter(pl.col("n") < min_samples)["run"]
         bad_zero = set()
         bad_std = set()
         for c in cols:
