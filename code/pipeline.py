@@ -8,7 +8,14 @@ from scipy.signal import stft
 from scipy.stats import kurtosis, skew
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import IsolationForest
+import gc
 from tqdm import tqdm
+
+pl.Config.set_tbl_rows(-1)       # show all rows
+pl.Config.set_tbl_cols(-1)       # show all columns
+pl.Config.set_fmt_str_lengths(200)  # don't truncate long strings (like your trial names)
+pl.Config.set_tbl_width_chars(-1)   # don't wrap based on terminal width
 
 """
 The Class for the Medalian Pipeline
@@ -65,6 +72,17 @@ class Pipeline:
 
 
         return set(bad_short) | set(bad_zero) | set(bad_std)
+
+    def gold_remove_outliers(self, df: pl.DataFrame):
+        X = df.select(pl.exclude(['trial', 'run', 'fault_mode', 'routine'])).to_numpy()
+        logging.info("SILVER LAYER: Removing Outliers...")
+        iso = IsolationForest(contamination=0.03, random_state=42, verbose=0)
+        outliers = iso.fit_predict(X)  # -1 = outlier, 1 = inlier
+        cleaned_df = df.filter(pl.Series(outliers) == 1)
+        logging.info(f"SILVER LAYER: done, df is: {df.height} rows, {len(df.columns)} cols")
+        del X, iso, outliers
+        gc.collect()
+        return cleaned_df
 
     def compute_spectral_kurtosis(
         self, x: np.ndarray, fs: float, nperseg: int
@@ -198,57 +216,60 @@ class Pipeline:
             results.extend(self.process_file(file, cols))
 
         silver_df = pl.DataFrame(results)
+
         silver_df.write_parquet(self.silver_data_path)
         logging.info(f"SILVER LAYER: Done! Saved File to {self.silver_data_path}")
 
-    def gold_layer(self):
+    def gold_layer(self, signal_cols):
         logging.info("GOLD LAYER: starting...")
         if not Path(self.silver_data_path).exists():
             logging.info("Silver layer data not found, running Silver layer...")
-            self.silver_layer(
-                cols=[
-                    "SpindleAccX",
-                    "SpindleAccY",
-                    "SpindleAccZ",
-                    "PlateLFAccX",
-                    "PlateLFAccY",
-                    "PlateLFAccZ",
-                    "PlateHFAccZ",
-                    "Power",
-                ],
-            )
+            self.silver_layer(signal_cols)
 
         df = pl.read_parquet(self.silver_data_path)
-
+        df = self.gold_remove_outliers(df)
         exclude_cols = ["trial", "run", "fault_mode", "routine"]
         feature_cols = [c for c in df.columns if c not in exclude_cols]
 
+        # --- Global PCA (whole dataset, one shared coordinate system) ---
+        logging.info("GOLD LAYER: Running PCA globally...")
+        X = df.select(feature_cols).to_numpy()
+        X_scaled = StandardScaler().fit_transform(X)
+        global_pca = PCA(n_components=3)
+        global_components = global_pca.fit_transform(X_scaled)
+        logging.info(f"GLOBAL EXPLAINED VARIANCE: {global_pca.explained_variance_ratio_}")
+
+        global_pc_cols = [
+            pl.Series(f"dataset_PCA{i+1}", global_components[:, i])
+            for i in range(global_components.shape[1])
+        ]
+        df = df.with_columns(global_pc_cols)
+
+        # --- Per-routine PCA (own coordinate system per routine) ---
         routine_frames = []
         for routine in tqdm(
             df["routine"].unique().to_list(), desc="Processing Features for PCA"
         ):
             logging.info(f"GOLD LAYER: Running PCA for {routine}...")
             sub_df = df.filter(pl.col("routine") == routine)
-
-            X = sub_df.select(feature_cols).to_numpy()
-            X_scaled = StandardScaler().fit_transform(X)
-
+            X_r = sub_df.select(feature_cols).to_numpy()
+            X_r_scaled = StandardScaler().fit_transform(X_r)
             pca = PCA(n_components=3)
-            components = pca.fit_transform(X_scaled)
+            components = pca.fit_transform(X_r_scaled)
+            logging.info(f"  {routine} explained variance: {pca.explained_variance_ratio_}")
 
-            sub_df = sub_df.select(["trial", "run", "fault_mode"]).with_columns(
-                [
-                    pl.Series("PC1", components[:, 0]),
-                    pl.Series("PC2", components[:, 1]),
-                    pl.Series("PC3", components[:, 2]),
-                ]
-            )
+            pc_cols = [
+                pl.Series(f"PC{i+1}", components[:, i])
+                for i in range(components.shape[1])
+            ]
+            keep_cols = ["trial", "run", "fault_mode", "routine"] + [f"dataset_PCA{i+1}" for i in range(global_components.shape[1])]
+            sub_df = sub_df.select(keep_cols).with_columns(pc_cols)
             routine_frames.append(sub_df)
 
         gold_df = pl.concat(routine_frames)
+        gold_df = self.gold_remove_outliers(gold_df)
         gold_df.write_parquet(self.gold_data_path)
         logging.info(f"GOLD LAYER: Done! Saved File to {self.gold_data_path}")
-
 
 # ---- command line running
 # example usage:
@@ -331,7 +352,7 @@ def main():
         run_override=args.silver_run_override,
     )
 
-    pipeline.gold_layer()
+    pipeline.gold_layer(signal_cols=args.cols)
 
 
 if __name__ == "__main__":

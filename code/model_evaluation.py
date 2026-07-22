@@ -40,6 +40,7 @@ class Model(ABC):
 
 
 def evaluate(model: Model, X_test: np.ndarray, y_test: np.ndarray):
+    print(f"{model.name}:\n")
     y_pred = model.predict(X_test)
     print(classification_report(y_test, y_pred))
     return y_pred
