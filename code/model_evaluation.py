@@ -1,6 +1,9 @@
 from abc import ABC
 from sklearn.metrics import classification_report
 from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.svm import SVC
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 import xgboost as xgb
@@ -64,12 +67,21 @@ def main():
 
     LR_model = Model("Logistic Regression", LogisticRegression)
     XGB_model = Model("XGBoost", xgb.XGBClassifier)
+    RF_model = Model("Random Forest", RandomForestClassifier, n_estimators=300, random_state=42)
+    SVC_model = Model("SVC", SVC, kernel="rbf", C=1.0)
+    KNN_model = Model("KNN", KNeighborsClassifier, n_neighbors=5)
 
     LR_model.fit(X_train, y_train)
     XGB_model.fit(X_train, y_train_enc)
+    RF_model.fit(X_train, y_train)
+    SVC_model.fit(X_train, y_train)
+    KNN_model.fit(X_train, y_train)
 
     evaluate(LR_model, X_test, y_test)
     evaluate(XGB_model, X_test, y_test_enc)
+    evaluate(RF_model, X_test, y_test)
+    evaluate(SVC_model, X_test, y_test)
+    evaluate(KNN_model, X_test, y_test)
 
 
 if __name__ == "__main__":
