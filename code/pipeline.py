@@ -57,12 +57,12 @@ class Pipeline:
         )
 
         bad_short = run_stats.filter(pl.col("n") < min_samples)["run"]
-        bad_zero = run_stats.filter(
-            pl.sum_horizontal([f"{c}_abssum" for c in cols]) == 0
-        )["run"]
-        bad_std = run_stats.filter(pl.sum_horizontal([f"{c}_std" for c in cols]) == 0)[
-            "run"
-        ]
+        bad_zero = set()
+        bad_std = set()
+        for c in cols:
+            bad_zero |= set(run_stats.filter(pl.col(f"{c}_abssum") == 0)["run"])
+            bad_std |= set(run_stats.filter(pl.col(f"{c}_std") == 0)["run"])
+
 
         return set(bad_short) | set(bad_zero) | set(bad_std)
 
